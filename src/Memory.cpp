@@ -41,7 +41,7 @@ bool Memory::hasSchema(){
     return false;
   } 
   //Check ADDR_CONTACT_FLAG is 2 Bytes (0xFACE)
-  if (EEPROM::read(ADDR_CONTACT_FLAG) != 0xFA || EEPROM::read(ADDR_CONTACT_FLAG) != 0xCE) {
+  if (EEPROM::read(ADDR_CONTACT_FLAG) != 0xFA || EEPROM::read(ADDR_CONTACT_FLAG + 1) != 0xCE) {
     return false;
   }
   //Check ADDR_MESSAGE_FLAG is 2 Bytes (0xCA11)
@@ -56,20 +56,21 @@ bool Memory::hasSchema(){
 void Memory::setSchema(){
     //Write to the EEPROM Flag for 0xCOFFEE
     EEPROM::write(ADDR_INIT_FLAG, 0xC0);
-    EEPROM::write(ADDR_INIT_FLAG, 0xFF);
-    EEPROM::write(ADDR_INIT_FLAG, 0xEE);
+    EEPROM::write(ADDR_INIT_FLAG + 1, 0xFF);
+    EEPROM::write(ADDR_INIT_FLAG + 2, 0xEE);
 
     //Write to the EEPROM Flag for 0xFACE
     EEPROM::write(ADDR_CONTACT_FLAG, 0xFA);
-    EEPROM::write(ADDR_CONTACT_FLAG, 0xCE);
+    EEPROM::write(ADDR_CONTACT_FLAG + 1, 0xCE);
 
     //Write to the EEPROM flag for 0xCA11
     EEPROM::write(ADDR_MESSAGE_FLAG, 0xCA);
-    EEPROM::write(ADDR_MESSAGE_FLAG, 0x11);
+    EEPROM::write(ADDR_MESSAGE_FLAG + 1, 0x11);
 
     //Start the Counters @ 0
     EEPROM::write(ADDR_CONTACT_COUNT, 0);
     EEPROM::write(ADDR_MESSAGE_COUNT, 0);
+    EEPROM::write(ADDR_MESSAGE_OFFSET, 0);
 
 }
 
@@ -119,7 +120,7 @@ unsigned char* Memory::getNodeUUID(){
     uuid_bfr[i] = EEPROM::read(ADDR_NODE_CONTACT + i);
   }
 
-  return uuid_buffer;
+  return uuid_bfr;
 }
 
 //Read 10 Byte Name from EEPROM
@@ -149,8 +150,29 @@ unsigned short Memory::getNumberMessages(){
 
 //Get memory offset
 Contact Memory::getContact(unsigned short index){
-  //Returns memory offset
-  return EEPROM::read(ADDR_MESSAGE_OFFSET);
+  // Check index boundary (Contact objects are stored sequentially from index 0 to 9)
+    if (index >= getNumberContacts() || index >= MAX_CONTACTS) {
+        return Contact(); // Return empty object if index is out of bounds
+    }
+    
+    // Calculate start address (Contact size is 15 Bytes)
+    uint16_t addr = ADDR_CONTACT_LIST + (index * 15); 
+    
+    uint8_t uuid_bfr[Contact::UUID_LEN];
+    char name_bfr[Contact::NAME_LEN];
+    
+    // Read UUID (5 Bytes)
+    for(int i = 0; i < Contact::UUID_LEN; i++) {
+        uuid_bfr[i] = EEPROM::read(addr + i);
+    }
+
+    // Read Name (10 Bytes)
+    for(int i = 0; i < Contact::NAME_LEN; i++) {
+        name_bfr[i] = EEPROM::read(addr + Contact::UUID_LEN + i);
+    }
+    
+    // Create Contact object and return
+    return Contact(uuid_bfr, name_bfr);
     
 }
 
@@ -166,7 +188,7 @@ Message Memory::getMessage(unsigned short index){
     uint16_t addr = ADDR_MESSAGE_LIST + (index * 13);
 
     //Read 13 Byte Message data
-    uint8_t = [13];
+    uint8_t buffer[13];
     for(int i = 0; i < 13; i++) {
       buffer[i] = EEPROM::read(addr + i);
     }
@@ -218,46 +240,57 @@ bool Memory::saveContact(Contact contact){
   return true;
 }
 
-//Saves message object to EEPROM message list
+//Saves message object to EEPROM message list (circular buffer)
 bool Memory::saveMessage(Message message){
+    //Declared here for proper scope
+    unsigned short offset;
+    
+    //Get current message count (for MAX_MESSAGES check and count update)
+    unsigned short current_count = getNumberMessages();
+    
+    //Get the index where the message should be written next (the pointer)
+    unsigned short current_offset_index = getMessagePointerOffset();
 
-  unsigned short count = getNumberMessage();
-  unsigned short count = getMessagePointerOffset();
+    //Determine offset for the message location
+    if(current_count < MAX_MESSAGES) {
+        // List is NOT full: Write sequentially and increment the counter.
+        offset = current_count * 13;
+        // Increment message counter
+        EEPROM::write(ADDR_MESSAGE_COUNT, current_count + 1);
+    }
+    else
+    {
+        //List IS full: Use the offset index for circular write (oldest message).
+        offset = current_offset_index * 13;
+    }
+    
+    //Calculate final address for message
+    uint16_t addr = ADDR_MESSAGE_LIST + offset;
 
-  //Check message size (20 max)
-  if(count < MAX_MESSAGES) {
-    //Save at the end of list with current offset
-    offset = count * 13;      //Offset is index * size
-    EEPROM::write(ADDR_MESSAGE_LIST, count + 1);
-  }
-  else
-  {
-    //Setup offset
-    offset = offset * 13
-  }
-  //Calculate address for message
-  uint16_t addr = ADDR_MESSAGE_LIST + offset;
+    //Prepare Message Object Data (13 Bytes)
+    uint8_t buffer[13];
+    
+    //UUID From (5 Byte)
+    memcpy(buffer, message.getFrom(), 5);
+    //UUID To (5 Byte)
+    memcpy(buffer + 5, message.getTo(), 5);
+    
+    //Payload (2 Byte) - Assumes little-endian storage order
+    buffer[10] = (uint8_t)(message.getPayload() & 0xFF);   // LSB
+    buffer[11] = (uint8_t)(message.getPayload() >> 8);     // MSB
+    
+    //Length (1 Byte)
+    buffer[12] = message.getLength();
 
-  //Write message object data (UUID, payload, length)
-  uint8_t buffer[13];
-  //UUID 5 Byte
-  memcpy(buffer, message.getFrom(), 5);
-  memcpy(buffer + 5, message.getTo(), 5);
-  //Payload 2 Byte
-  buffer[10] = (uint8_t)(message.getPayload() & 0xFF);    //LSB
-  buffer[11] = (uint8_t)(message.getPayload >> 8);    //MSB
-  //Length 1 Byte
-  buffer[12] = message.getLength();
+    //Write 13 Byte buffer to EEPROM
+    for(int i = 0; i < 13; i++) {
+        EEPROM::write(addr + i, buffer[i]);
+    }
 
-  //Write 13 Byte buffer to EEPROM
-  for(int i = 0; i < 13; i++) {
-    EEPROM::write(addr + i, buffer[i]);
-  }
+    //Update message pointer offset for next save
+    //The next offset index should wrap around from MAX_MESSAGES
+    unsigned short next_offset_index = (current_offset_index + 1) % MAX_MESSAGES;
+    EEPROM::write(ADDR_MESSAGE_OFFSET, next_offset_index);
 
-  //Update message pointer offset for next save
-  unsigned short next_offset = (offset + 13) % (MAX_MESSAGES * 13);
-  //Store Index
-  EEPROM::write(ADDR_MESSAGE_OFFSET, next_offset / 13);
-
-  return true;
+    return true;
 }
