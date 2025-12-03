@@ -3,11 +3,11 @@
 #include <Arduino.h>
 #include <string.h>
 
-EEPROM myEEPROM;
+// EEPROM myEEPROM; // Unused
 
 //EEPROM ADDRESS CONSTANTS
 //Flags
-#define ADDR_INT_FLAG       0x000   //3 Bytes: 0xCOFFEE
+#define ADDR_INIT_FLAG      0x000   //3 Bytes: 0xCOFFEE
 #define ADDR_CONTACT_FLAG   0X018   //2 Bytes: 0xFACE
 #define ADDR_MESSAGE_FLAG   0x171   //2 Bytes: 0xCA11
 
@@ -101,11 +101,11 @@ void Memory::saveNodeInformation(Contact contact){
   char* name_ptr = contact.getName();
 
   //5 Bytes for UUID
-  for(int i = 0; i < Contact.UUID_LEN; i++) {
+  for(int i = 0; i < Contact::UUID_LEN; i++) {
     EEPROM::write(ADDR_NODE_CONTACT + i, uuid_ptr[i]);
   }
   //10 Bytes for Name, account for null terminator
-  for(int i = 0; i < Contact.NAME_LEN; i++) {
+  for(int i = 0; i < Contact::NAME_LEN; i++) {
     EEPROM::write(ADDR_NODE_CONTACT + Contact::UUID_LEN + i, name_ptr[i]);
   }
 
